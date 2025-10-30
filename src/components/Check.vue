@@ -1,8 +1,7 @@
 <template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="wrapper">
-      <a-flex :direction="'vertical'" :justify="'center'" :align="'center'">
-        <div class="page-content">
+      <div class="page-content">
           <div class="container" :class="{ 'shift-left': shouldShift }">
             <div class="header">
               <button
@@ -206,11 +205,49 @@
                 </div>
               </div>
 
+              <!-- 流式测试选项 -->
+              <div class="stream-test-options">
+                <div class="stream-option">
+                  <label for="enable_stream">
+                    <input
+                      type="checkbox"
+                      v-model="enableStreamTest"
+                      id="enable_stream"
+                      name="enable_stream"
+                    />
+                    {{ t('ENABLE_STREAM_TEST') }}
+                  </label>
+                </div>
+                <div class="stream-option">
+                  <label for="include_comparison">
+                    <input
+                      type="checkbox"
+                      v-model="includeComparison"
+                      id="include_comparison"
+                      name="include_comparison"
+                      :disabled="!enableStreamTest"
+                    />
+                    {{ t('INCLUDE_COMPARISON') }}
+                  </label>
+                </div>
+                <div class="stream-option">
+                  <label for="open_stream_monitor">
+                    <input
+                      type="checkbox"
+                      v-model="openStreamMonitor"
+                      id="open_stream_monitor"
+                      name="open_stream_monitor"
+                    />
+                    {{ t('OPEN_STREAM_MONITOR') }}
+                  </label>
+                </div>
+              </div>
+
               <div class="submit-container">
                 <a-button
                   type="primary"
                   :loading="testModels_spinning"
-                  @click="testModels"
+                  @click="handleTestModels"
                   class="submit-query"
                   size="large"
                 >
@@ -331,6 +368,17 @@
                     <template v-else-if="column.dataIndex === 'responseTime'">
                       {{ record.responseTime }}
                     </template>
+                    <template v-else-if="column.dataIndex === 'streamInfo'">
+                      <a-tooltip v-if="record.streamInfo" placement="topLeft">
+                        <template #title>
+                          <div style="white-space: pre-line">
+                            {{ record.type === 'stream' ? '流式测试\nTTFB: ' + (record.ttfb || '-') + 'ms\nToken速度: ' + (record.tokensPerSecond || '-') + '/s\nToken数量: ' + (record.tokenCount || '-') : '' }}
+                          </div>
+                        </template>
+                        <span>{{ record.streamInfo }}</span>
+                      </a-tooltip>
+                      <span v-else>{{ record.streamInfo || '-' }}</span>
+                    </template>
                     <template v-else-if="column.dataIndex === 'buttons'">
                       <template
                         v-if="record.buttons && record.buttons.length > 0"
@@ -444,8 +492,7 @@
               />
             </div>
           </div>
-        </div>
-      </a-flex>
+      </div>
     </div>
     <a-modal
       v-model:open="functionCallingModalVisible"
@@ -1044,6 +1091,18 @@
       </div>
     </a-modal>
     <ExperimentalFeatures v-model:visible="showExperimentalFeatures" />
+
+    <!-- 流式监控模态框 -->
+    <a-modal
+      v-model:open="showStreamMonitorModal"
+      :title="t('STREAM_MONITOR')"
+      width="90%"
+      :footer="null"
+      :destroyOnClose="true"
+      centered
+    >
+      <StreamMonitor />
+    </a-modal>
   </ConfigProvider>
 </template>
 <script setup>
@@ -1107,6 +1166,7 @@ import {
   cantTemperatureModelList,
   presetPromptsList,
 } from '../utils/models.js';
+import StreamMonitor from './StreamMonitor.vue';
 
 // 注册必须的组件
 echarts.use([
@@ -1189,6 +1249,12 @@ const progressPercent = ref(0);
 const chatSite = ref('https://chat.crond.dev');
 const enableChat = ref(true);
 const showExperimentalFeatures = ref(false);
+
+// 流式测试相关
+const enableStreamTest = ref(false);
+const includeComparison = ref(false);
+const openStreamMonitor = ref(false);
+const showStreamMonitorModal = ref(false);
 const pagination = reactive({
   current: 1,
   pageSize: 8, // 默认每页显示8条，可以根据需要调整
@@ -1520,6 +1586,25 @@ const clearForm = () => {
 
 const handleSubmit = () => {};
 
+// 处理测试模型按钮点击
+function handleTestModels() {
+  const options = {
+    enableStream: enableStreamTest.value,
+    includeComparison: includeComparison.value,
+    customPrompt: '写一个10个字的冷笑话'
+  };
+
+  if (openStreamMonitor.value) {
+    showStreamMonitorModal.value = true;
+    // 给模态框一些时间来初始化
+    setTimeout(() => {
+      testModels(options);
+    }, 500);
+  } else {
+    testModels(options);
+  }
+}
+
 // 获取模型列表
 async function getModelList() {
   spinning.value = true; // 开始加载动画
@@ -1656,7 +1741,13 @@ const checkQuota = async () => {
 };
 
 // 添加 testModels 函数
-async function testModels() {
+async function testModels(options = {}) {
+  const {
+    enableStream = false,
+    includeComparison = false,
+    customPrompt = '写一个10个字的冷笑话'
+  } = options;
+
   // 重置结果
   results.valid = [];
   results.invalid = [];
@@ -1690,7 +1781,7 @@ async function testModels() {
   showResultContainer.value = true;
 
   // 初始化进度
-  totalModels.value = selectedModels.value.length;
+  totalModels.value = modelNames.length;
   completedModels.value = 0;
   progressPercent.value = 0;
   testingComplete.value = false;
@@ -1705,14 +1796,17 @@ async function testModels() {
       concurrency,
       progress => {
         updateTableData(progress);
-        completedModels.value += 1;
-        progressPercent.value = Math.round(
-          (completedModels.value / totalModels.value) * 100
-        );
+        if (progress.type !== 'comparisonStarted') {
+          completedModels.value += 1;
+          progressPercent.value = Math.round(
+            (completedModels.value / totalModels.value) * 100
+          );
+        }
         if (completedModels.value >= totalModels.value) {
           testingComplete.value = true;
         }
-      }
+      },
+      { enableStream, includeComparison, customPrompt }
     );
     testModels_spinning.value = false;
     showSummary(results);
@@ -1733,6 +1827,12 @@ function updateTableData(progress) {
     results.invalid.push(data);
   } else if (type === 'inconsistent') {
     results.inconsistent.push(data);
+  } else if (type === 'streamValid') {
+    // 处理流式测试成功的结果
+    results.valid.push(data);
+  } else if (type === 'streamInvalid') {
+    // 处理流式测试失败的结果
+    results.invalid.push(data);
   }
   // 重新计算表格数据
   tableData.value = computeTableData();
@@ -1750,6 +1850,13 @@ function computeTableData() {
     const buttons = [];
     const notChatPattern =
       /^(dall|mj|midjourney|stable-diffusion|playground|flux|swap_face|tts|whisper|text|emb|luma|vidu|pdf|suno|pika|chirp|domo|runway|cogvideo|babbage|davinci|gpt-4o-realtime)/;
+
+    // 处理流式测试结果的数据结构
+    let responseTime = item.responseTime;
+    if (item.type === 'stream' && item.totalTime) {
+      // 流式测试返回的是totalTime而不是responseTime
+      responseTime = item.totalTime;
+    }
 
     // 添加对话验证按钮 (放在最前面) 如果是对话模型
     if (!notChatPattern.test(item.model)) {
@@ -1802,14 +1909,30 @@ function computeTableData() {
       }
     }
 
+    // 生成流式信息
+    let streamInfo = '';
+    if (item.type === 'stream') {
+      const parts = [];
+      if (item.ttfb) parts.push(`${item.ttfb}ms`);
+      if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
+      if (item.tokenCount) parts.push(`${item.tokenCount}t`);
+      streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
+    }
+
     data.push({
       key: `valid-${index}`,
       status: `🥳${t('MODEL_STATE_AVAILABLE')} `,
       model: item.model,
-      responseTime: item.responseTime.toFixed(2),
+      responseTime: responseTime.toFixed(2),
+      streamInfo: streamInfo,
       buttons: buttons,
       remark: remark,
       fullRemark: fullRemark,
+      // 添加流式测试标识和原始数据
+      type: item.type || 'normal',
+      ttfb: item.ttfb || null,
+      tokensPerSecond: item.tokensPerSecond || null,
+      tokenCount: item.tokenCount || null,
     });
   });
 
@@ -1819,6 +1942,13 @@ function computeTableData() {
 
     const notChatPattern =
       /^(dall|mj|midjourney|stable-diffusion|playground|flux|swap_face|tts|whisper|text|emb|luma|vidu|pdf|suno|pika|chirp|domo|runway|cogvideo|babbage|davinci|gpt-4o-realtime)/;
+
+    // 处理流式测试结果的数据结构
+    let responseTime = item.responseTime;
+    if (item.type === 'stream' && item.totalTime) {
+      // 流式测试返回的是totalTime而不是responseTime
+      responseTime = item.totalTime;
+    }
 
     // 添加对话验证按钮 (放在最前面) 如果是对话模型
     if (!notChatPattern.test(item.model)) {
@@ -1885,14 +2015,30 @@ function computeTableData() {
       }
     }
 
+    // 生成流式信息
+    let streamInfo = '';
+    if (item.type === 'stream') {
+      const parts = [];
+      if (item.ttfb) parts.push(`${item.ttfb}ms`);
+      if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
+      if (item.tokenCount) parts.push(`${item.tokenCount}t`);
+      streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
+    }
+
     data.push({
       key: `inconsistent-${index}`,
       status: status,
       model: item.model,
-      responseTime: item.responseTime.toFixed(2),
+      responseTime: responseTime.toFixed(2),
+      streamInfo: streamInfo,
       buttons: buttons,
       remark: remark,
       fullRemark: fullRemark,
+      // 添加流式测试标识和原始数据
+      type: item.type || 'normal',
+      ttfb: item.ttfb || null,
+      tokensPerSecond: item.tokensPerSecond || null,
+      tokenCount: item.tokenCount || null,
     });
   });
 
@@ -1953,7 +2099,7 @@ const columns = [
     dataIndex: 'status',
     key: 'status',
     fixed: 'left',
-    width: 100,
+    width: 90,
     customCell: () => ({ attrs: { 'data-label': t('MODEL_STATUS_LABEL') } }),
     sorter: (a, b) => a.status.localeCompare(b.status),
   },
@@ -1961,7 +2107,7 @@ const columns = [
     title: '模型名称',
     dataIndex: 'model',
     key: 'model',
-    width: 180,
+    width: 200,
     ellipsis: true,
     resizable: true,
     sorter: (a, b) => a.model.localeCompare(b.model),
@@ -1970,17 +2116,28 @@ const columns = [
   {
     title: '用时',
     dataIndex: 'responseTime',
-    width: 70,
+    width: 65,
     key: 'responseTime',
     resizable: true,
     sorter: (a, b) => parseFloat(a.responseTime) - parseFloat(b.responseTime),
     customCell: () => ({ attrs: { 'data-label': t('RESPONSE_TIME_LABEL') } }),
   },
   {
+    title: t('STREAM_INFO'),
+    dataIndex: 'streamInfo',
+    key: 'streamInfo',
+    width: 200,
+    ellipsis: {
+      showTitle: true,
+    },
+    resizable: true,
+    customCell: () => ({ attrs: { 'data-label': t('STREAM_INFO') } }),
+  },
+  {
     title: '备注',
     dataIndex: 'remark',
     key: 'remark',
-    width: 100,
+    width: 120,
     ellipsis: true,
     resizable: true,
     customCell: () => ({ attrs: { 'data-label': t('REMARK_LABEL') } }),
@@ -1989,7 +2146,7 @@ const columns = [
     title: '验证',
     dataIndex: 'buttons',
     key: 'buttons',
-    width: 90,
+    width: 70,
     fixed: 'right',
     customCell: () => ({
       attrs: { 'data-label': t('VERIFICATION_BUTTONS_LABEL') },
@@ -3089,7 +3246,7 @@ body.dark-mode #themeIcon {
 .right-icons {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 8px;
 }
 
 /* 语言切换按钮 */
@@ -3208,6 +3365,52 @@ textarea {
   justify-content: space-between;
   flex-wrap: wrap;
   margin-top: 10px;
+}
+
+/* 流式测试选项布局 */
+.stream-test-options {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--background-color, #f5f5f5);
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #d9d9d9);
+}
+
+.stream-option {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.stream-option label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--font-color, #333);
+}
+
+.stream-option input[type="checkbox"] {
+  margin-right: 8px;
+  transform: scale(1.1);
+}
+
+.stream-option input[type="checkbox"]:disabled + label {
+  color: #999;
+  cursor: not-allowed;
+}
+
+/* 深色模式适配 */
+body.dark-mode .stream-test-options {
+  background: var(--card-background, #1f1f1f);
+  border-color: var(--border-color, #434343);
+}
+
+body.dark-mode .stream-option label {
+  color: var(--font-color, #e0e0e0);
 }
 
 .model-timeout,
@@ -3456,18 +3659,24 @@ input[type='number']:not(:placeholder-shown) {
     flex-direction: row;
     align-items: flex-start;
     justify-content: center;
-    max-width: 1200px;
+    max-width: 1500px;
     margin: 20px auto;
   }
 
   .container,
   .container.result-container {
     max-width: 600px;
-    flex: 0 1 auto;
+    flex: 0 0 600px;  /* 固定宽度，禁止收缩 */
     min-height: 0; /* 允许容器根据内容收缩 */
     margin: 0 10px;
     display: flex;
     flex-direction: column;
+  }
+
+  /* 表格容器需要更大的宽度 */
+  .container.result-container {
+    max-width: 800px;
+    flex: 0 0 800px;  /* 固定宽度，禁止收缩 */
   }
 
   .container.result-container {

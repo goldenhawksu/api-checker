@@ -11,6 +11,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+// 简单的健康检查 GET 请求
+router.get('/', (req, res) => {
+  res.set(corsHeaders);
+  res.json({
+    status: 'ok',
+    message: 'API Server is running',
+    timestamp: new Date().toISOString(),
+    version: '2.1.0'
+  });
+});
+
 // 处理 OPTIONS 请求
 router.options('/', (req, res) => {
   res.set(corsHeaders);

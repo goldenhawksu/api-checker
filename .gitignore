@@ -34,3 +34,29 @@ tput
 
 
 
+.spec-workflow/config.example.toml
+.spec-workflow/templates/design-template.md
+.spec-workflow/templates/product-template.md
+.spec-workflow/templates/requirements-template.md
+.spec-workflow/templates/structure-template.md
+.spec-workflow/templates/tasks-template.md
+.spec-workflow/templates/tech-template.md
+.spec-workflow/user-templates/README.md
+test/analyze_deepseek.py
+test/comprehensive_test_report_20251030_150014.json
+test/comprehensive_test_report_20251030_150928.json
+test/comprehensive_test_report_20251030_151705.json
+test/comprehensive_test_report_20251030_152031.json
+test/comprehensive_test.py
+test/deepseek_deep_diagnosis.py
+test/deepseek_diagnostic_report_20251030_170818.json
+test/detailed_stream_test.py
+test/detailed_test_report_20251030_130250.json
+test/detailed_test_report_20251030_130352.json
+test/final_verification_report_20251030_131017.json
+test/final_verification_test.py
+test/stream_api_diagnosis.py
+test/stream_diagnosis_report_20251030_091238.json
+test/verify_report_20251030_091731.json
+test/verify_stream_fix.py
+test/verify_web_fix.py

@@ -22,9 +22,20 @@ import apiRouter from './api/local/index.js';
 import aliveRouter from './api/local/alive.js';
 
 // 设置后端接口路由，位于 `/api` 路径下
-app.use('/api/alive', aliveRouter);
+// 独立的健康检查路由，不需要认证
+app.get('/api/alive', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'API Server is running',
+    timestamp: new Date().toISOString(),
+    version: '2.1.0'
+  });
+});
+
+// 其他需要认证的路由
 app.use('/api/auth', authRouter);
 app.use('/api', apiRouter);
+app.use('/api/alive', aliveRouter); // 实验性功能路由
 
 // 设置静态文件目录，位于根路径 `/`
 app.use(express.static(path.join(__dirname, 'dist')));
