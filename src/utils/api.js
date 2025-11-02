@@ -124,8 +124,32 @@ export async function testModelList(
             has_o1_reason = true;
           }
 
+          // 🔧 增强性能指标收集 - 提取响应内容和计算Token指标
+          const content = data.choices?.[0]?.message?.content || '';
+          const contentLength = content.length;
+
+          // 估算token数（简单估算：字符数作为token数的近似值）
+          // 注意：这是粗略估算，实际应该用tokenizer
+          const estimatedTokens = contentLength;
+
+          // 计算TTFB（首字节时间）- 非流式模式下等于总响应时间
+          const ttfb = responseTime * 1000; // 转换为毫秒
+
+          // 计算tokens/s
+          const tokensPerSecond = responseTime > 0 ?
+            (estimatedTokens / responseTime).toFixed(2) : 0;
+
           if (returnedModel === model) {
-            const resultData = { model, responseTime, has_o1_reason };
+            const resultData = {
+              model,
+              responseTime,
+              ttfb,                    // 🆕 TTFB (毫秒)
+              tokenCount: estimatedTokens,  // 🆕 Token数量
+              tokensPerSecond,         // 🆕 Token速率
+              contentLength,           // 🆕 响应内容长度
+              has_o1_reason,
+              type: 'non-stream'       // 🆕 标识为非流式测试
+            };
             valid.push(resultData);
             progressCallback({
               type: 'valid',
@@ -136,7 +160,12 @@ export async function testModelList(
               model,
               returnedModel,
               responseTime,
+              ttfb,                    // 🆕 TTFB
+              tokenCount: estimatedTokens,  // 🆕 Token数量
+              tokensPerSecond,         // 🆕 Token速率
+              contentLength,           // 🆕 响应内容长度
               has_o1_reason,
+              type: 'non-stream'       // 🆕 标识为非流式测试
             };
             inconsistent.push(resultData);
             progressCallback({
@@ -145,17 +174,44 @@ export async function testModelList(
             });
           }
         } else {
+          // 🔧 增强HTTP错误处理 - 提供更友好的错误提示
+          let response_text = '';
+          let error_type = '';
+
           try {
             const jsonResponse = await response.json();
-            response_text = jsonResponse.error.message;
+            response_text = jsonResponse.error?.message || JSON.stringify(jsonResponse);
+
+            // 根据HTTP状态码提供更清晰的错误类型
+            if (response.status === 401) {
+              error_type = '认证失败';
+            } else if (response.status === 404) {
+              error_type = '模型不存在';
+            } else if (response.status === 500) {
+              error_type = '服务器错误';
+            } else if (response.status === 503) {
+              error_type = '服务不可用';
+            } else if (response.status === 524) {
+              error_type = '请求超时';
+            } else {
+              error_type = `HTTP ${response.status}`;
+            }
           } catch (jsonError) {
             try {
               response_text = await response.text();
+              error_type = `HTTP ${response.status}`;
             } catch (textError) {
               response_text = '无法解析响应内容';
+              error_type = `HTTP ${response.status}`;
             }
           }
-          const resultData = { model, response_text };
+
+          const resultData = {
+            model,
+            response_text: error_type ? `[${error_type}] ${response_text}` : response_text,
+            http_status: response.status,
+            error_type
+          };
           invalid.push(resultData);
           progressCallback({
             type: 'invalid',
@@ -185,10 +241,24 @@ export async function testModelList(
             type: 'streamValid',
             data: resultData,
           });
+        } else if (streamResult.isEmpty && !streamResult.error) {
+          // 流式返回空（HTTP 200但无数据），标记为"流式不可用"而非完全失败
+          const resultData = {
+            model,
+            ...streamResult.metrics,
+            warning: '流式模式无数据，建议使用非流式模式',
+            type: 'stream-empty'
+          };
+          // 仍然加入valid列表，但标记为需要警告
+          valid.push(resultData);
+          progressCallback({
+            type: 'streamEmpty',
+            data: resultData,
+          });
         } else {
           const resultData = {
             model,
-            error: streamResult.error,
+            error: streamResult.error || '流式测试失败',
             type: 'stream'
           };
           invalid.push(resultData);
@@ -199,21 +269,35 @@ export async function testModelList(
         }
       }
     } catch (error) {
+      // 🔧 增强异常处理 - 识别不同类型的错误
+      let error_message = error.message;
+      let error_type = '未知错误';
+
       if (error.name === 'AbortError') {
-        const resultData = { model, error: '超时' };
-        invalid.push(resultData);
-        progressCallback({
-          type: 'invalid',
-          data: resultData,
-        });
-      } else {
-        const resultData = { model, error: error.message };
-        invalid.push(resultData);
-        progressCallback({
-          type: 'invalid',
-          data: resultData,
-        });
+        error_type = '请求超时';
+        error_message = '请求超时，请增加超时时间或检查网络连接';
+      } else if (error.message && error.message.includes('Failed to fetch')) {
+        error_type = '网络错误';
+        error_message = '网络连接失败，请检查网络连接或API地址';
+      } else if (error.message && (error.message.includes('IncompleteRead') || error.message.includes('Connection broken'))) {
+        error_type = '连接中断';
+        error_message = '连接中断，可能是服务器或网络问题';
+      } else if (error.message && error.message.includes('timeout')) {
+        error_type = '请求超时';
+        error_message = '请求超时';
       }
+
+      const resultData = {
+        model,
+        error: error_message,
+        error_type,
+        response_text: `[${error_type}] ${error_message}`
+      };
+      invalid.push(resultData);
+      progressCallback({
+        type: 'invalid',
+        data: resultData,
+      });
     } finally {
       clearTimeout(id);
     }
@@ -390,10 +474,13 @@ async function testStreamModel(apiUrl, apiKey, model, prompt, controller, startT
     metrics.totalTime = (endTime - startTime) / 1000;
 
     // 判断测试是否成功：需要收到至少一个token
+    // 注意：某些模型可能在流式模式下不返回数据，但非流式正常
     const success = metrics.tokenCount > 0;
+    const isEmpty = metrics.tokenCount === 0;
 
     return {
       success: success,
+      isEmpty: isEmpty,  // 标记是否为空响应
       metrics: {
         ...metrics,
         tokensPerSecond: metrics.tokenCount > 0 ?

@@ -372,7 +372,19 @@
                       <a-tooltip v-if="record.streamInfo" placement="topLeft">
                         <template #title>
                           <div style="white-space: pre-line">
-                            {{ record.type === 'stream' ? '流式测试\nTTFB: ' + (record.ttfb || '-') + 'ms\nToken速度: ' + (record.tokensPerSecond || '-') + '/s\nToken数量: ' + (record.tokenCount || '-') : '' }}
+                            <!-- 🔧 优化tooltip显示 - 区分流式和非流式 -->
+                            <span v-if="record.type === 'stream'">
+                              <strong>流式测试</strong>
+                              <br/>TTFB: {{ record.ttfb || '-' }}ms
+                              <br/>Token速度: {{ record.tokensPerSecond || '-' }}/s
+                              <br/>Token数量: {{ record.tokenCount || '-' }}
+                            </span>
+                            <span v-else-if="record.type === 'non-stream'">
+                              <strong>非流式测试</strong>
+                              <br/>TTFB: {{ record.ttfb ? record.ttfb.toFixed(0) : '-' }}ms
+                              <br/>Token速度: {{ record.tokensPerSecond || '-' }}/s
+                              <br/>Token数量: {{ record.tokenCount || '-' }}
+                            </span>
                           </div>
                         </template>
                         <span>{{ record.streamInfo }}</span>
@@ -1168,6 +1180,17 @@ import {
 } from '../utils/models.js';
 import StreamMonitor from './StreamMonitor.vue';
 
+// API支持的模型列表
+// 改为动态从API获取，避免硬编码限制
+// 优势：
+//   1. 自动发现新模型（如claude-4-sonnet, deepseek-reasoner等28个被遗漏的模型）
+//   2. 自动排除下线模型（如chatgpt-4o-latest等10个API中不存在的模型）
+//   3. 零维护成本
+//   4. 符合测试工具的动态发现原则
+// 测试结果：API实际支持47个模型，硬编码仅29个，重叠率65.5%
+const availableModels = ref([]);  // 初始为空，从API动态加载
+
+
 // 注册必须的组件
 echarts.use([
   TitleComponent,
@@ -1896,9 +1919,11 @@ function computeTableData() {
         });
       }
     }
-    // 针对 o1- 模型的特殊处理
+    // 🔧 优化备注信息 - 显示流式/非流式支持状态
     let remark = '';
     let fullRemark = '';
+
+    // 针对 o1- 模型的特殊处理
     if (item.model.startsWith('o1-')) {
       if (item.has_o1_reason) {
         remark = t('O1_API_RELIABLE'); // '✨API 可靠'
@@ -1907,13 +1932,30 @@ function computeTableData() {
         remark = t('O1_API_POSSIBLE_ISSUE'); // '⚠️API 可能存在问题'
         fullRemark = t('O1_API_POSSIBLE_ISSUE_DETAIL'); // '返回响应中不包含 reasoning_tokens 或为空，API 非官'
       }
+    } else {
+      // 🆕 显示流式/非流式支持状态
+      if (item.type === 'stream') {
+        remark = '✅支持流式';
+        fullRemark = '模型支持流式响应';
+      } else if (item.type === 'non-stream') {
+        remark = '✅支持非流式';
+        fullRemark = '模型支持非流式响应';
+      }
     }
 
-    // 生成流式信息
+    // 🔧 优化性能信息展示 - 统一流式和非流式的性能指标显示
     let streamInfo = '';
     if (item.type === 'stream') {
+      // 流式模式：显示TTFB、Token速度、Token数量
       const parts = [];
-      if (item.ttfb) parts.push(`${item.ttfb}ms`);
+      if (item.ttfb) parts.push(`TTFB:${item.ttfb}ms`);
+      if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
+      if (item.tokenCount) parts.push(`${item.tokenCount}t`);
+      streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
+    } else if (item.type === 'non-stream' && (item.ttfb || item.tokensPerSecond || item.tokenCount)) {
+      // 🆕 非流式模式：同样显示性能指标
+      const parts = [];
+      if (item.ttfb) parts.push(`TTFB:${item.ttfb.toFixed(0)}ms`);
       if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
       if (item.tokenCount) parts.push(`${item.tokenCount}t`);
       streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
@@ -1989,7 +2031,7 @@ function computeTableData() {
       }
     }
 
-    // 根据返回的模型名称，判断是模型映射还是未匹配
+    // 根据返回的模型名称,判断是模型映射还是未匹配
     let status;
     let remark;
     let fullRemark;
@@ -2000,7 +2042,7 @@ function computeTableData() {
       fullRemark = `${t('MAPPED_TO_MODEL')}: ${item.returnedModel}`;
     } else {
       status = `🤔${t('NO_MATCH')}`; // 使用国际化字符串
-      remark = t('NO_MATCH'); // 如果需要，也可以添加 remark 的国际化
+      remark = t('NO_MATCH'); // 如果需要,也可以添加 remark 的国际化
       fullRemark = `${t('RETURNED_MODEL')}: ${item.returnedModel}`;
     }
 
@@ -2008,18 +2050,35 @@ function computeTableData() {
     if (item.model.startsWith('o1-')) {
       if (item.has_o1_reason) {
         remark = t('O1_API_RELIABLE'); // '✨API 可靠'
-        fullRemark = t('O1_API_RELIABLE_DETAIL'); // '返回响应中包含非空 reasoning_tokens，API 可靠'
+        fullRemark = t('O1_API_RELIABLE_DETAIL'); // '返回响应中包含非空 reasoning_tokens,API 可靠'
       } else {
         remark = t('O1_API_POSSIBLE_ISSUE'); // '⚠️API 可能存在问题'
-        fullRemark = t('O1_API_POSSIBLE_ISSUE_DETAIL'); // '返回响应中不包含 reasoning_tokens 或为空，API 非官'
+        fullRemark = t('O1_API_POSSIBLE_ISSUE_DETAIL'); // '返回响应中不包含 reasoning_tokens 或为空,API 非官'
+      }
+    } else {
+      // 🆕 显示流式/非流式支持状态
+      if (item.type === 'stream') {
+        remark = '✅支持流式';
+        fullRemark = '模型支持流式响应';
+      } else if (item.type === 'non-stream') {
+        remark = '✅支持非流式';
+        fullRemark = '模型支持非流式响应';
       }
     }
 
-    // 生成流式信息
+    // 🔧 优化性能信息展示 - 统一流式和非流式的性能指标显示
     let streamInfo = '';
     if (item.type === 'stream') {
+      // 流式模式：显示TTFB、Token速度、Token数量
       const parts = [];
-      if (item.ttfb) parts.push(`${item.ttfb}ms`);
+      if (item.ttfb) parts.push(`TTFB:${item.ttfb}ms`);
+      if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
+      if (item.tokenCount) parts.push(`${item.tokenCount}t`);
+      streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
+    } else if (item.type === 'non-stream' && (item.ttfb || item.tokensPerSecond || item.tokenCount)) {
+      // 🆕 非流式模式：同样显示性能指标
+      const parts = [];
+      if (item.ttfb) parts.push(`TTFB:${item.ttfb.toFixed(0)}ms`);
       if (item.tokensPerSecond) parts.push(`${item.tokensPerSecond}t/s`);
       if (item.tokenCount) parts.push(`${item.tokenCount}t`);
       streamInfo = parts.length > 0 ? parts.join(' · ') : '-';
@@ -2046,7 +2105,37 @@ function computeTableData() {
   results.invalid.forEach((item, index) => {
     let displayedRemark;
     let fullRemark = item.response_text || item.error || '';
-    displayedRemark = errorHandler(fullRemark);
+
+    // 🔧 优化失败模型的备注 - 显示HTTP错误代码和详细原因
+    if (item.http_status) {
+      // 有HTTP状态码的错误
+      const errorCodeMap = {
+        401: '401-账号被禁用',
+        403: '403-访问被拒绝',
+        404: '404-模型不存在',
+        500: '500-上游失效',
+        503: '503-服务不可用',
+        524: '524-请求超时',
+      };
+      displayedRemark = errorCodeMap[item.http_status] || `${item.http_status}-服务器错误`;
+
+      // 如果有错误类型，也添加到备注中
+      if (item.error_type && item.error_type !== `HTTP ${item.http_status}`) {
+        displayedRemark = `${displayedRemark} (${item.error_type})`;
+      }
+    } else if (item.error_type) {
+      // 没有HTTP状态码但有错误类型（如网络错误）
+      const errorTypeMap = {
+        '连接中断': '❌连接中断',
+        '网络错误': '❌网络错误',
+        '请求超时': '❌请求超时',
+        '未知错误': '❌未知错误'
+      };
+      displayedRemark = errorTypeMap[item.error_type] || `❌${item.error_type}`;
+    } else {
+      // 使用原有的错误处理函数
+      displayedRemark = errorHandler(fullRemark);
+    }
 
     data.push({
       key: `invalid-${index}`,

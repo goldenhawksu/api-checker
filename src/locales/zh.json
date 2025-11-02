@@ -17,7 +17,7 @@
   "INCLUDE_COMPARISON": "包含对比测试",
   "OPEN_STREAM_MONITOR": "打开流式监控",
   "STREAM_MONITOR": "流式监控",
-  "STREAM_INFO": "流式信息",
+  "STREAM_INFO": "性能指标",
   "TTFB_LABEL": "TTFB",
   "TOKEN_SPEED_LABEL": "Speed",
   "GIVE_STAR": "给我一个星星",
